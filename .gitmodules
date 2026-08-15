@@ -1,0 +1,3 @@
+[submodule "enclave-os-mini"]
+	path = enclave-os-mini
+	url = https://github.com/Privasys/enclave-os-mini.git

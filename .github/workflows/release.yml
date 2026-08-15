@@ -1,0 +1,150 @@
+# Copyright (c) Privasys. All rights reserved.
+# Licensed under the GNU Affero General Public License v3.0. See LICENSE file for details.
+#
+# Enclave Cluster: reproducible build + MRENCLAVE extraction + release.
+#
+# Triggers:
+#   - cluster-v*     → full build, GitHub release with artifacts
+#   - pull requests  → build + component tests, no release
+#
+# The enclave is built from the enclave-os-mini submodule pin, inside
+# that repo's reproducible build container, with the cluster flavor
+# flags (merkle + raft + wasm + fido2).
+#
+# The enclave-os-mini submodule is public; checkout needs no extra
+# credentials.
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "cluster-v*"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CLUSTER_FLAGS: "-DENABLE_WASM=ON -DENABLE_FIDO2=ON -DENABLE_MERKLE=ON -DENABLE_RAFT=ON"
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # Component tests (no SGX needed — the crates are sans-I/O)
+  # ────────────────────────────────────────────────────────────────────
+  component-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Raft consensus suite
+        working-directory: enclave-os-mini/crates/enclave-os-raft
+        run: cargo test
+
+      - name: Merkle ledger suite
+        working-directory: enclave-os-mini/crates/enclave-os-merkle
+        run: cargo test
+
+  # ────────────────────────────────────────────────────────────────────
+  # Reproducible enclave build
+  # ────────────────────────────────────────────────────────────────────
+  build-enclave:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Build the builder image
+        run: |
+          docker build -t enclave-cluster-build:ci \
+            -f enclave-os-mini/docker/Dockerfile.build enclave-os-mini
+
+      - name: Build enclave (cluster flavor)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/enclave-os-mini:/src" \
+            -e CARGO_INCREMENTAL=0 \
+            -e SOURCE_DATE_EPOCH=0 \
+            -e FLAVOR=base \
+            -e EXTRA_CMAKE_FLAGS="${{ env.CLUSTER_FLAGS }}" \
+            enclave-cluster-build:ci
+
+      - name: Fix build output permissions
+        run: sudo chown -R "$(id -u):$(id -g)" enclave-os-mini/build/ enclave-os-mini/target/
+
+      - name: Read MRENCLAVE
+        run: |
+          MRENCLAVE=$(cat enclave-os-mini/build/mrenclave.txt)
+          echo "## Enclave Cluster — MRENCLAVE" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${MRENCLAVE}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate build manifest
+        run: |
+          SUB_SHA=$(git -C enclave-os-mini rev-parse HEAD)
+          cat > enclave-os-mini/build/build-manifest.json <<EOF
+          {
+            "product": "enclave-cluster",
+            "version": "${{ github.ref_name }}",
+            "commit": "${{ github.sha }}",
+            "enclave_os_mini": "${SUB_SHA}",
+            "flavor_flags": "${{ env.CLUSTER_FLAGS }}",
+            "mrenclave": "$(cat enclave-os-mini/build/mrenclave.txt)",
+            "signed_enclave_sha256": "$(sha256sum enclave-os-mini/build/bin/enclave.signed.so | cut -d' ' -f1)",
+            "host_sha256": "$(sha256sum enclave-os-mini/target/release/enclave-os-host 2>/dev/null | cut -d' ' -f1 || echo 'N/A')",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          cat enclave-os-mini/build/build-manifest.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: enclave-cluster-build
+          path: |
+            enclave-os-mini/build/bin/enclave.signed.so
+            enclave-os-mini/build/mrenclave.txt
+            enclave-os-mini/build/build-manifest.json
+            enclave-os-mini/target/release/enclave-os-host
+
+  # ────────────────────────────────────────────────────────────────────
+  # GitHub release (tags only)
+  # ────────────────────────────────────────────────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/cluster-v')
+    needs: [component-tests, build-enclave]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: enclave-cluster-build
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: "Enclave Cluster ${{ github.ref_name }}"
+          body: |
+            Reproducible Enclave Cluster build (merkle + raft + wasm + fido2).
+
+            **MRENCLAVE**: see `mrenclave.txt` / `build-manifest.json`.
+
+            Peer links pin this measurement: all nodes of a cluster must
+            run the same release. Upgrade via the rotation runbook in
+            `docs/operations.md`.
+          files: |
+            artifacts/build/bin/enclave.signed.so
+            artifacts/build/mrenclave.txt
+            artifacts/build/build-manifest.json
+            artifacts/target/release/enclave-os-host

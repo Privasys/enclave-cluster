@@ -1,0 +1,4 @@
+# Build outputs land inside the submodule
+enclave-os-mini/build/
+enclave-os-mini/target/
+*.log
