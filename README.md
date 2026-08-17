@@ -28,12 +28,11 @@ the operator documentation, and the multi-node end-to-end tests.
   Raft are closed by design: a rolled-back node cannot double-vote
   (incarnation-gated voting), and a node whose state diverges from the
   quorum is detected and repaired, not trusted.
-- **Vault-anchored cluster credential** (managed mode) — the shared
-  ledger commitment key is generated in-enclave, split across a vault
-  constellation, and released to a node only if it passes the key
-  policy's measurement + TCB checks. Obtaining the credential IS
-  cluster admission; no shared secret ever appears in configuration.
-  Standalone deployments can still supply the key by hand.
+- **Vault-anchored cluster credential** — the shared ledger commitment
+  key is generated in-enclave, split across a vault constellation, and
+  released to a node only if it passes the key policy's measurement +
+  TCB checks. Obtaining the credential IS cluster admission; no shared
+  secret ever exists outside TEEs, and none appears in configuration.
 - **Policy-driven upgrades** — the credential policy is the single
   source of truth for which enclave builds may participate: nodes
   read the admissible measurement set from it and refresh
@@ -65,40 +64,49 @@ the operator documentation, and the multi-node end-to-end tests.
   entry, and network imports rejected at load — and fails closed on
   any mismatch.
 
-## Quickstart (three local nodes)
+## Quickstart (three nodes)
 
-Prerequisites: an SGX machine with DCAP quoting (the user needs the
-`sgx_prv` group), a built release (see *Building*), and a fleet CA
-(every node holds the same intermediary CA — possession is the fleet
-credential).
+There is no config-supplied cluster key: the ledger commitment key
+lives in a vault constellation and every node obtains it by
+attestation — fetching the credential IS cluster admission. One-time
+setup on the platform: register the release's MRENCLAVE (published
+with every release) as an approved platform enclave, and mint a
+key-creation grant for the cluster credential (its policy pins the
+measurement, the certificate identity, and the acceptable Intel TCB
+statuses). Each node also needs an SGX machine with DCAP quoting (the
+user in the `sgx_prv` group), a built release (see *Building*), and
+the fleet CA (every node holds the same intermediary CA).
 
 ```bash
-# One-time: fleet CA and cluster commitment key
-openssl ecparam -name prime256v1 -genkey -noout -out ca.key.pem
-openssl pkcs8 -topk8 -nocrypt -in ca.key.pem -out ca.pkcs8.pem
-openssl req -new -x509 -key ca.key.pem -subj "/CN=my-fleet-ca" -days 365 -out ca.crt.pem
-CLUSTER_KEY=$(openssl rand -hex 32)
-
-# Node 1 (repeat with ids 2 and 3, adjusting ports and peers)
+# Node 1. The grant is needed only on the FIRST boot of the first
+# node — it creates the credential; every other node and boot omits
+# it and is admitted by attestation alone.
 enclave-os-host \
   --enclave-path enclave.signed.so \
   --port 9601 --peer-port 9701 --kv-path node1/kv \
   --ca-cert ca.crt.pem --ca-key ca.pkcs8.pem \
+  --egress-ca-bundle /etc/ssl/certs/ca-certificates.crt \
+  --attestation-servers <attestation-server-url> \
+  --attestation-token-file /path/to/token \
   --extra '{
     "raft_node_id": 1,
     "raft_peers": {"2": "10.0.0.2:9702", "3": "10.0.0.3:9703"},
-    "raft_cluster_key": "'$CLUSTER_KEY'"
+    "raft_vault": {
+      "mgmt_url": "https://<management-service>",
+      "environment": "production",
+      "handle": "apps.privasys.org/<app-id>/raft-ck",
+      "grant": "<key-creation grant, first boot of node 1 only>",
+      "app_id": "<app-id-hex>"
+    },
+    "raft_acceptable_tcb_statuses": ["ConfigurationAndSWHardeningNeeded"]
   }'
 ```
 
 The cluster elects a leader within seconds; progress is visible in the
-logs (`raft: role=... term=... commit=... verified=...`). This is the
-standalone quickstart; production deployments should use the
-vault-anchored credential (`raft_vault`) and attestation-server peer
-verification instead — see [docs/operations.md](docs/operations.md)
-for the full configuration reference, peer-admission model,
-join/promote/remove flows, and runbooks.
-[scripts/e2e.sh](scripts/e2e.sh) automates this whole scenario.
+logs (`raft: role=... term=... commit=... verified=...`). See
+[docs/operations.md](docs/operations.md) for the full configuration
+reference, the peer-admission model, the join/promote/remove flows,
+and the runbooks.
 
 ## API surface
 

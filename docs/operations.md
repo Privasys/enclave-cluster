@@ -25,11 +25,10 @@ blob is written relative to it.
 | --- | --- | --- |
 | `raft_node_id` | yes | This node's id (u64, unique; joiners take ids higher than existing nodes) |
 | `raft_peers` | yes | `{"<id>": "host:port", ...}` — peer-port addresses of the other nodes |
-| `raft_vault` | one of | Managed mode: the cluster key lives in a vault constellation (see below). `{"mgmt_url", "environment", "handle", "grant", "app_id"}` |
-| `raft_cluster_key` | one of | Standalone mode: 64-hex shared secret; the ledger commitment key derives from it. The host sees this value — prefer `raft_vault` where available |
+| `raft_vault` | yes | The cluster credential: the key lives in a vault constellation (see below). `{"mgmt_url", "environment", "handle", "grant", "app_id"}` |
 | `raft_genesis_voters` | joiners | The cluster's founding voter ids (the joiner NOT among them) |
 | `raft_log_retain` | no | Applied entries to keep in the log (default 1024; compaction triggers at twice this) |
-| `raft_pin_measurements` | no | Admissible peer MRENCLAVEs (hex list). Default: in managed mode, the credential policy's measurement set (refreshed every 10 minutes); otherwise this build's own measurement. Standalone clusters list {old, new} here during an upgrade window |
+| `raft_pin_measurements` | no | Explicit admissible peer MRENCLAVEs (hex list), overriding the credential policy's measurement set. Break-glass only — normally the policy is the source of truth |
 | `raft_pin_measurement` | no | Set `false` to disable the measurement pin entirely (weakens the trust model; transitional use only) |
 | `raft_acceptable_tcb_statuses` | no | Intel TCB statuses accepted on peer quotes beyond the secure floor (`UpToDate`/`SWHardeningNeeded`). Absent = no TCB check; `[]` = strict floor-only; `Revoked` is never accepted and may not be listed |
 | `raft_reattest_secs` | no | Link max age before recycling for a fresh quote (default 86400; 0 disables) |
@@ -59,10 +58,10 @@ Configure the acceptable TCB set deliberately: most real fleets report
 control), so a strict floor-only set will reject them. Accepting a
 status below the floor is a documented, auditable decision.
 
-## Managed mode: the vault-anchored cluster key
+## The cluster credential
 
-With `raft_vault`, the cluster key never appears in any configuration
-or on any host. The first node generates it inside its enclave,
+The cluster key never appears in any configuration or on any host.
+The first node generates it inside its enclave,
 splits it across the vault constellation (no single vault holds the
 whole key), and every later node obtains it by attestation alone: the
 vaults release a share only to an enclave that passes the key
@@ -93,11 +92,15 @@ credential is cluster admission.**
 
 ## Bootstrap (founding a cluster)
 
-1. Generate the fleet CA and the cluster key; distribute both to every
-   founding node (the cluster key is a secret — treat it like one).
-2. Start all founders with complete `raft_peers` maps and **no**
-   `raft_genesis_voters` (founders default to "all configured nodes are
-   voters", admitted at genesis).
+1. Generate the fleet CA and distribute it to every founding node.
+   Register the release's MRENCLAVE as an approved platform enclave
+   and mint the credential's key-creation grant (see *The cluster
+   credential*).
+2. Start the FIRST node with the grant in its `raft_vault` config —
+   it creates the cluster key on the constellation and seals its
+   copy. Start the remaining founders without a grant (complete
+   `raft_peers` maps, **no** `raft_genesis_voters`); they are
+   admitted by attestation and reconstruct the key.
 3. A leader emerges within seconds. Verify with `raft_status`: one
    `"role":"leader"`, identical `ledger_root` everywhere, `verified`
    tracking `commit`.
@@ -106,8 +109,8 @@ credential is cluster admission.**
 
 1. Pick an id **higher** than any existing node's (the higher id dials,
    so a joiner reaches every founder).
-2. Start it with the full peer map, the cluster key, and
-   `raft_genesis_voters` set to the founding voter list.
+2. Start it with the full peer map, its `raft_vault` config (no
+   grant), and `raft_genesis_voters` set to the founding voter list.
 3. On the leader: `{"raft_add_learner":{"node":<id>}}` — the node
    catches up by replication, or by snapshot if the log has compacted
    past it (automatic either way).
@@ -146,7 +149,7 @@ Peer links pin the enclave measurement, so nodes running different
 releases will refuse each other. Upgrades open a two-measurement
 window instead of disabling the pin.
 
-**Managed mode — no node configuration is touched at any point:**
+No node configuration is touched at any point:
 
 1. Note the new release's MRENCLAVE (published with every release)
    and register it as an approved platform enclave.
@@ -165,15 +168,11 @@ window instead of disabling the pin.
    key.
 
 To abort mid-roll, remove the NEW measurement from the policy instead
-and roll the upgraded nodes back.
-
-**Standalone mode** (config-supplied key): the same window is driven
-by configuration — restart each node with
-`"raft_pin_measurements": ["<old>", "<new>"]` and the new binary,
-then restart with `["<new>"]` (or drop the key) once the roll is
-complete. The legacy escape hatch (`"raft_pin_measurement": false`)
-still exists but drops the measurement gate entirely — the
-two-measurement window makes it unnecessary.
+and roll the upgraded nodes back. (`raft_pin_measurements` can drive
+the same window from configuration as a break-glass override, and
+`"raft_pin_measurement": false` still exists as a last resort that
+drops the measurement gate entirely — the policy window makes both
+unnecessary in normal operation.)
 
 ## WASM transactions
 

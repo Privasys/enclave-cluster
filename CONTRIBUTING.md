@@ -26,10 +26,12 @@ cd enclave-cluster
 # Component tests run anywhere (no SGX needed):
 cd enclave-os-mini/crates/enclave-os-raft   && cargo test
 cd ../enclave-os-merkle                     && cargo test
-
-# Multi-node end-to-end (requires an SGX machine with DCAP quoting):
-./scripts/e2e.sh
 ```
+
+Multi-node end-to-end testing requires an SGX machine with DCAP
+quoting AND access to a vault constellation for the cluster
+credential (there is no config-supplied key), so it runs against a
+platform environment rather than from this repository alone.
 
 ## Pull requests
 

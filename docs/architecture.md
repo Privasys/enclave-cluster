@@ -20,11 +20,10 @@ verified independently of the fleet CA — signature chain to the Intel
 root, QE identity, revocation, DEBUG flag, and the platform's Intel
 TCB status against the cluster's acceptance policy — so even a stolen
 fleet-CA key does not admit an attacker, and a platform downgraded
-below the accepted TCB is refused. In managed deployments the shared
-ledger commitment key itself is held by a vault constellation and
-released only to enclaves passing the same class of checks: obtaining
-the credential is admission, and no shared secret exists outside
-TEEs. A node therefore cannot lie about the protocol — the code is
+below the accepted TCB is refused. The shared ledger commitment key
+itself is held by a vault constellation and released only to enclaves
+passing the same class of checks: obtaining the credential is
+admission, and no shared secret exists outside TEEs. A node therefore cannot lie about the protocol — the code is
 measured — and the adversary is each node's **host**, which can crash
 the process, delay or drop traffic, partition the network, and roll
 back anything the node persisted.
