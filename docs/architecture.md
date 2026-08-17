@@ -11,12 +11,23 @@ mechanisms; the operational procedures live in
 
 Membership is measurement-gated: peer links are mutual TLS 1.3
 terminated inside the enclaves, chained to a fleet CA that only
-provisioned enclaves hold, and pinned to the cluster's MRENCLAVE (the
-peer's certificate must carry an SGX quote for the same binary). A node
-therefore cannot lie about the protocol — the code is measured — and
-the adversary is each node's **host**, which can crash the process,
-delay or drop traffic, partition the network, and roll back anything
-the node persisted.
+provisioned enclaves hold, and pinned to the cluster's admissible
+MRENCLAVE set (the peer's certificate must carry an SGX quote for an
+admitted binary, and the quote must be bound to that certificate's
+own key, so evidence cannot be transplanted between certificates).
+When an attestation server is configured, each link's quote is also
+verified independently of the fleet CA — signature chain to the Intel
+root, QE identity, revocation, DEBUG flag, and the platform's Intel
+TCB status against the cluster's acceptance policy — so even a stolen
+fleet-CA key does not admit an attacker, and a platform downgraded
+below the accepted TCB is refused. In managed deployments the shared
+ledger commitment key itself is held by a vault constellation and
+released only to enclaves passing the same class of checks: obtaining
+the credential is admission, and no shared secret exists outside
+TEEs. A node therefore cannot lie about the protocol — the code is
+measured — and the adversary is each node's **host**, which can crash
+the process, delay or drop traffic, partition the network, and roll
+back anything the node persisted.
 
 Plain Raft is not safe against that last power, so two hardenings make
 the rollback-sensitive facts *cluster state* instead of local state:

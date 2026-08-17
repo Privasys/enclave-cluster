@@ -19,11 +19,21 @@ the operator documentation, and the multi-node end-to-end tests.
   *encryption independent*: every node encrypts its storage with its own
   key, yet all nodes produce byte-identical roots, so replicas compare
   state as `(version, root)`.
-- **Attested Raft consensus** — only enclaves whose measurement matches
-  the cluster's may participate (quote-pinned mutual TLS peer links).
-  The classic host attacks on Raft are closed by design: a rolled-back
-  node cannot double-vote (incarnation-gated voting), and a node whose
-  state diverges from the quorum is detected and repaired, not trusted.
+- **Attested Raft consensus** — only enclaves whose measurement is in
+  the cluster's admissible set may participate: peer links are mutual
+  TLS between enclaves, the peer's SGX quote is pinned to its
+  certificate key, and (when configured) independently verified by an
+  attestation server, including the platform's Intel TCB status
+  against an explicit acceptance policy. The classic host attacks on
+  Raft are closed by design: a rolled-back node cannot double-vote
+  (incarnation-gated voting), and a node whose state diverges from the
+  quorum is detected and repaired, not trusted.
+- **Vault-anchored cluster credential** (managed mode) — the shared
+  ledger commitment key is generated in-enclave, split across a vault
+  constellation, and released to a node only if it passes the key
+  policy's measurement + TCB checks. Obtaining the credential IS
+  cluster admission; no shared secret ever appears in configuration.
+  Standalone deployments can still supply the key by hand.
 - **Verified commits** — every node reports the ledger root it computed
   for each applied entry; an entry is *verified* once a quorum agrees.
   Divergence is attributed (outlier follower, outlier leader, or
@@ -68,9 +78,12 @@ enclave-os-host \
 ```
 
 The cluster elects a leader within seconds; progress is visible in the
-logs (`raft: role=... term=... commit=... verified=...`). See
-[docs/operations.md](docs/operations.md) for the full configuration
-reference, the join/promote/remove flows, and the runbooks —
+logs (`raft: role=... term=... commit=... verified=...`). This is the
+standalone quickstart; production deployments should use the
+vault-anchored credential (`raft_vault`) and attestation-server peer
+verification instead — see [docs/operations.md](docs/operations.md)
+for the full configuration reference, peer-admission model,
+join/promote/remove flows, and runbooks.
 [scripts/e2e.sh](scripts/e2e.sh) automates this whole scenario.
 
 ## API surface
