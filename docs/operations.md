@@ -29,7 +29,7 @@ blob is written relative to it.
 | `raft_cluster_key` | one of | Standalone mode: 64-hex shared secret; the ledger commitment key derives from it. The host sees this value — prefer `raft_vault` where available |
 | `raft_genesis_voters` | joiners | The cluster's founding voter ids (the joiner NOT among them) |
 | `raft_log_retain` | no | Applied entries to keep in the log (default 1024; compaction triggers at twice this) |
-| `raft_pin_measurements` | no | Admissible peer MRENCLAVEs (hex list). Default: this build's own measurement. List {old, new} during an upgrade window |
+| `raft_pin_measurements` | no | Admissible peer MRENCLAVEs (hex list). Default: in managed mode, the credential policy's measurement set (refreshed every 10 minutes); otherwise this build's own measurement. Standalone clusters list {old, new} here during an upgrade window |
 | `raft_pin_measurement` | no | Set `false` to disable the measurement pin entirely (weakens the trust model; transitional use only) |
 | `raft_acceptable_tcb_statuses` | no | Intel TCB statuses accepted on peer quotes beyond the secure floor (`UpToDate`/`SWHardeningNeeded`). Absent = no TCB check; `[]` = strict floor-only; `Revoked` is never accepted and may not be listed |
 | `raft_reattest_secs` | no | Link max age before recycling for a fresh quote (default 86400; 0 disables) |
@@ -83,6 +83,13 @@ credential is cluster admission.**
 - The policy's attestation-server URL and the node's
   `--attestation-servers` value must both match the platform's
   configured endpoint string exactly (including the path).
+- **The policy is the source of truth for peer admission**: unless an
+  explicit `raft_pin_measurements` list is configured, every node
+  reads the admissible measurement set from the credential policy's
+  TEE profiles at startup and re-reads it every 10 minutes. A node
+  that boots from its sealed key copy while the vaults are unreachable
+  starts with an own-measurement-only set and widens it at the next
+  successful refresh.
 
 ## Bootstrap (founding a cluster)
 
@@ -137,27 +144,36 @@ snapshot/repair activity is logged explicitly.
 
 Peer links pin the enclave measurement, so nodes running different
 releases will refuse each other. Upgrades open a two-measurement
-window instead of disabling the pin:
+window instead of disabling the pin.
 
-1. Note the new release's MRENCLAVE (published with every release).
-2. In managed mode, have the key owner approve the new measurement on
-   the cluster credential's policy first — a node running the new
-   release cannot obtain the cluster key until the policy admits it.
-3. Rolling restart, one node at a time, with
-   `"raft_pin_measurements": ["<old>", "<new>"]` and the new binary.
-   Restarted nodes rejoin through the normal re-admission path (log
-   replication or snapshot streaming); quorum survives throughout.
-4. When every node runs the new release, restart each with the
-   single-entry set `["<new>"]` (or drop the key to return to the
-   own-measurement default), and retire the old measurement from the
-   credential policy. Old binaries can no longer peer nor obtain the
+**Managed mode — no node configuration is touched at any point:**
+
+1. Note the new release's MRENCLAVE (published with every release)
+   and register it as an approved platform enclave.
+2. The key owner approves the new measurement on the cluster
+   credential's policy (adds a TEE profile for it). Within the
+   10-minute refresh window every running node widens its admissible
+   set to {old, new}; a new-release node cannot obtain the cluster
+   key a moment earlier.
+3. Rolling restart, one node at a time, with the new binary.
+   Restarted nodes fetch the key (the policy now admits them), rejoin
+   through the normal re-admission path (log replication or snapshot
+   streaming), and quorum survives throughout.
+4. When every node runs the new release, the owner retires the old
+   measurement from the policy. Running nodes narrow their sets on
+   the next refresh; old binaries can no longer peer nor obtain the
    key.
 
-To abort mid-roll, remove the NEW measurement instead and roll the
-upgraded nodes back. The legacy escape hatch
-(`"raft_pin_measurement": false`) still exists but drops the
-measurement gate entirely — the two-measurement window makes it
-unnecessary.
+To abort mid-roll, remove the NEW measurement from the policy instead
+and roll the upgraded nodes back.
+
+**Standalone mode** (config-supplied key): the same window is driven
+by configuration — restart each node with
+`"raft_pin_measurements": ["<old>", "<new>"]` and the new binary,
+then restart with `["<new>"]` (or drop the key) once the roll is
+complete. The legacy escape hatch (`"raft_pin_measurement": false`)
+still exists but drops the measurement gate entirely — the
+two-measurement window makes it unnecessary.
 
 ## Monitoring
 

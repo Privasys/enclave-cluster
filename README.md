@@ -34,6 +34,13 @@ the operator documentation, and the multi-node end-to-end tests.
   policy's measurement + TCB checks. Obtaining the credential IS
   cluster admission; no shared secret ever appears in configuration.
   Standalone deployments can still supply the key by hand.
+- **Policy-driven upgrades** — the credential policy is the single
+  source of truth for which enclave builds may participate: nodes
+  read the admissible measurement set from it and refresh
+  periodically, so a cluster upgrade is an owner-approved policy
+  change plus a rolling restart — no node reconfiguration, and the
+  measurement gate never drops. Verified live with two different
+  builds forming one quorum-verified cluster.
 - **Verified commits** — every node reports the ledger root it computed
   for each applied entry; an entry is *verified* once a quorum agrees.
   Divergence is attributed (outlier follower, outlier leader, or
