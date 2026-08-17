@@ -175,6 +175,40 @@ complete. The legacy escape hatch (`"raft_pin_measurement": false`)
 still exists but drops the measurement gate entirely — the
 two-measurement window makes it unnecessary.
 
+## WASM transactions
+
+Load an app (AOT-compiled with the in-tree `wasm-compile` tool) via
+`wasm_load`, then drive it through the transaction path:
+
+```json
+{"raft_wasm_txn": {"app": "my-app", "function": "credit",
+ "params": [{"type": "string", "value": "alice"},
+            {"type": "u64", "value": 100}]}}
+```
+
+The function executes against a fork of the ledger at the committed
+root (the app imports `privasys:enclave-os/ledger`); on success the
+write-set commits through consensus and the call's return values come
+back with the log index. A trap or error proposes nothing. Ledger
+functions error outside the transaction path — a plain `wasm_call`
+cannot write replicated state.
+
+**Replay mode** (`"txn_replay": true` on `wasm_load`): replicas
+re-execute every transaction deterministically and fail closed unless
+they reproduce the exact write-set. Requirements:
+
+- Load the app IDENTICALLY on every node (same bytes, same fuel
+  budget) before proposing; a node that cannot re-execute halts.
+- The app may not import HTTPS egress or sockets (rejected at load).
+  `wasi:random` stays available — inside a transaction it draws from
+  a per-transaction DRBG seeded from the committed entry, so draws
+  iterate normally but replay identically. Clocks return the
+  committed timestamp. P-256 signatures are RFC 6979 deterministic;
+  P-384 signing and key generation are refused inside a transaction.
+- All nodes must run a release that understands replay entries before
+  the first replay-mode app is loaded (older releases reject the
+  entries as corrupt).
+
 ## Monitoring
 
 - `raft_status` (monitoring role) per node: alert on `halted: true`, on

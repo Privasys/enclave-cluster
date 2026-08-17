@@ -54,9 +54,16 @@ the operator documentation, and the multi-node end-to-end tests.
   re-encrypts under its own storage key and verifies the advertised
   root), repair-by-replay for diverged ledgers, and live re-admission
   of restarted nodes.
-- **WASM runtime** — the full Enclave OS component-model runtime for
-  business logic, with the cluster transaction surface arriving next
-  (fork the ledger, execute, commit through consensus).
+- **WASM transactions** — business logic runs as Component Model apps
+  against the replicated ledger: a call through the transaction path
+  executes on a fork at the committed root
+  (`privasys:enclave-os/ledger` imports), and the write-set commits
+  through consensus. In **replay mode** replicas do not even trust the
+  write-set: every node re-executes the call deterministically — one
+  shared per-transaction DRBG behind `wasi:random`, clocks frozen to
+  the committed timestamp, RFC 6979 signatures, fuel committed in the
+  entry, and network imports rejected at load — and fails closed on
+  any mismatch.
 
 ## Quickstart (three local nodes)
 
@@ -103,6 +110,7 @@ Cluster operations ride the authenticated `POST /data` envelope
 | `raft_status` | monitoring | role, term, leader, commit/verified indexes, ledger `(root, version)`, membership |
 | `raft_certificate` | monitoring | latest quorum certificate + registered keys |
 | `raft_txn` | manager | propose a transaction (hex key/value ops; op without value = delete) |
+| `raft_wasm_txn` | manager | execute a WASM app export inside a cluster transaction (`{"app","function","params"}`) |
 | `raft_add_learner` / `raft_promote` / `raft_remove` | manager | membership changes |
 
 ```bash
