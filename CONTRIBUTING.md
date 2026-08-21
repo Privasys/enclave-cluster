@@ -33,8 +33,9 @@ quoting AND access to a vault constellation for the cluster
 credential (there is no config-supplied key).
 [scripts/e2e.sh](scripts/e2e.sh) runs the full three-node scenario —
 credential creation with the grant, attestation-only admission,
-policy-sourced measurement set, quorum verification, sealed-copy
-restart — parameterised by environment variables (see the script
+policy-sourced measurement set, quorum verification, restart
+re-admission, fail-closed refusal of an unpinned identity —
+parameterised by environment variables (see the script
 header): the platform prerequisites are a registered MRENCLAVE for
 your build and a freshly minted key-creation grant.
 

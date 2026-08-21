@@ -9,12 +9,15 @@ mechanisms; the operational procedures live in
 
 ## Trust model
 
-Membership is measurement-gated: peer links are mutual TLS 1.3
-terminated inside the enclaves, chained to a fleet CA that only
-provisioned enclaves hold, and pinned to the cluster's admissible
-MRENCLAVE set (the peer's certificate must carry an SGX quote for an
-admitted binary, and the quote must be bound to that certificate's
-own key, so evidence cannot be transplanted between certificates).
+Membership is measurement-gated: peer links are mutual challenge-mode
+RA-TLS (TLS 1.3) terminated inside the enclaves, chained to a fleet CA
+that only provisioned enclaves hold, and pinned to the cluster's
+admissible measurement set. Each side issues a fresh challenge nonce
+for every connection, and the peer's certificate must carry a quote
+whose `report_data` commits to that nonce, the certificate's own key
+and the TLS session's channel binder — evidence cannot be
+transplanted between certificates, replayed from an earlier
+connection, or relayed from another session.
 When an attestation server is configured, each link's quote is also
 verified independently of the fleet CA — signature chain to the Intel
 root, QE identity, revocation, DEBUG flag, and the platform's Intel
@@ -23,7 +26,10 @@ fleet-CA key does not admit an attacker, and a platform downgraded
 below the accepted TCB is refused. The shared ledger commitment key
 itself is held by a vault constellation and released only to enclaves
 passing the same class of checks: obtaining the credential is
-admission, and no shared secret exists outside TEEs. A node therefore cannot lie about the protocol — the code is
+admission, re-established on every boot (nodes keep no local copy, so
+revoking a measurement from the credential policy takes full effect at
+the affected nodes' next restart), and no shared secret exists outside
+TEEs. A node therefore cannot lie about the protocol — the code is
 measured — and the adversary is each node's **host**, which can crash
 the process, delay or drop traffic, partition the network, and roll
 back anything the node persisted.

@@ -21,18 +21,21 @@ the operator documentation, and the multi-node end-to-end tests.
   state as `(version, root)`.
 - **Attested Raft consensus** — only enclaves whose measurement is in
   the cluster's admissible set may participate: peer links are mutual
-  TLS between enclaves, the peer's SGX quote is pinned to its
-  certificate key, and (when configured) independently verified by an
-  attestation server, including the platform's Intel TCB status
-  against an explicit acceptance policy. The classic host attacks on
+  challenge-mode RA-TLS between enclaves (each side's quote commits to
+  the counterparty's fresh challenge nonce, the certificate key and
+  the TLS session's channel binder), and (when configured)
+  independently verified by an attestation server, including the
+  platform's Intel TCB status against an explicit acceptance policy. The classic host attacks on
   Raft are closed by design: a rolled-back node cannot double-vote
   (incarnation-gated voting), and a node whose state diverges from the
   quorum is detected and repaired, not trusted.
 - **Vault-anchored cluster credential** — the shared ledger commitment
   key is generated in-enclave, split across a vault constellation, and
   released to a node only if it passes the key policy's measurement +
-  TCB checks. Obtaining the credential IS cluster admission; no shared
-  secret ever exists outside TEEs, and none appears in configuration.
+  TCB checks. Obtaining the credential IS cluster admission,
+  re-established on every boot (nodes keep no local copy, so a policy
+  revocation is total at the next restart); no shared secret ever
+  exists outside TEEs, and none appears in configuration.
 - **Policy-driven upgrades** — the credential policy is the single
   source of truth for which enclave builds may participate: nodes
   read the admissible measurement set from it and refresh

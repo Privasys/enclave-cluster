@@ -28,8 +28,6 @@ blob is written relative to it.
 | `raft_vault` | yes | The cluster credential: the key lives in a vault constellation (see below). `{"mgmt_url", "environment", "handle", "grant", "app_id"}` |
 | `raft_genesis_voters` | joiners | The cluster's founding voter ids (the joiner NOT among them) |
 | `raft_log_retain` | no | Applied entries to keep in the log (default 1024; compaction triggers at twice this) |
-| `raft_pin_measurements` | no | Explicit admissible peer MRENCLAVEs (hex list), overriding the credential policy's measurement set. Break-glass only — normally the policy is the source of truth |
-| `raft_pin_measurement` | no | Set `false` to disable the measurement pin entirely (weakens the trust model; transitional use only) |
 | `raft_acceptable_tcb_statuses` | no | Intel TCB statuses accepted on peer quotes beyond the secure floor (`UpToDate`/`SWHardeningNeeded`). Absent = no TCB check; `[]` = strict floor-only; `Revoked` is never accepted and may not be listed |
 | `raft_reattest_secs` | no | Link max age before recycling for a fresh quote (default 86400; 0 disables) |
 
@@ -37,11 +35,15 @@ blob is written relative to it.
 
 Every peer link passes three checks:
 
-1. **Fleet + measurement pin (TLS layer)** — the peer's certificate
-   chains to the fleet CA, its embedded SGX quote's MRENCLAVE is in
-   the admissible set, and the quote is cryptographically bound to the
-   certificate's own key (a quote copied from another node's public
-   certificate is rejected).
+1. **Mutual challenge-mode RA-TLS** — both peers present certificates
+   chaining to the fleet CA, and each peer's embedded quote must
+   commit to the fresh challenge nonce the OTHER side issued for this
+   connection plus the TLS session's channel binder (bidirectional
+   challenge-response; a quote copied from another node's public
+   certificate, or relayed from another session, is rejected). On top
+   of the binding, the quote's measurement must be in the admissible
+   set sourced from the credential policy. A peer that does not
+   challenge, or presents no fresh quote, is refused.
 2. **Attestation-server verification** — when `--attestation-servers`
    is configured, the peer's quote is independently verified
    (signature chain to the Intel root, QE identity, revocation, DEBUG
@@ -75,20 +77,22 @@ credential is cluster admission.**
   Every other node and boot omits it. The grant is an authorisation
   token, not secret material: spending it requires passing the
   policy's attestation checks over mutual RA-TLS.
-- After the first fetch each node seals its copy under its own master
-  key: restarts do not depend on vault availability.
+- **Every boot fetches the key fresh** — there is no node-local copy.
+  Admission is re-established at every restart, so removing a
+  measurement from the policy is total revocation at the affected
+  nodes' next boot, and no key material lingers at rest. The vault
+  constellation is assumed reachable; a node that cannot reach it does
+  not boot the cluster module (fail-closed).
 - The cluster's MRENCLAVE must be registered as an approved platform
   enclave before its nodes can discover the constellation.
 - The policy's attestation-server URL and the node's
   `--attestation-servers` value must both match the platform's
   configured endpoint string exactly (including the path).
-- **The policy is the source of truth for peer admission**: unless an
-  explicit `raft_pin_measurements` list is configured, every node
-  reads the admissible measurement set from the credential policy's
-  TEE profiles at startup and re-reads it every 10 minutes. A node
-  that boots from its sealed key copy while the vaults are unreachable
-  starts with an own-measurement-only set and widens it at the next
-  successful refresh.
+- **The policy is the sole source of truth for peer admission**: every
+  node reads the admissible measurement set from the credential
+  policy's TEE profiles at boot (fail-closed, alongside the key fetch)
+  and re-reads it every 10 minutes. There is no configuration
+  override.
 
 ## Bootstrap (founding a cluster)
 
@@ -97,8 +101,8 @@ credential is cluster admission.**
    and mint the credential's key-creation grant (see *The cluster
    credential*).
 2. Start the FIRST node with the grant in its `raft_vault` config —
-   it creates the cluster key on the constellation and seals its
-   copy. Start the remaining founders without a grant (complete
+   it creates the cluster key on the constellation. Start the
+   remaining founders without a grant (complete
    `raft_peers` maps, **no** `raft_genesis_voters`); they are
    admitted by attestation and reconstruct the key.
 3. A leader emerges within seconds. Verify with `raft_status`: one
@@ -168,11 +172,8 @@ No node configuration is touched at any point:
    key.
 
 To abort mid-roll, remove the NEW measurement from the policy instead
-and roll the upgraded nodes back. (`raft_pin_measurements` can drive
-the same window from configuration as a break-glass override, and
-`"raft_pin_measurement": false` still exists as a last resort that
-drops the measurement gate entirely — the policy window makes both
-unnecessary in normal operation.)
+and roll the upgraded nodes back. The policy window is the only
+mechanism: there is no configuration override of the admissible set.
 
 ## WASM transactions
 

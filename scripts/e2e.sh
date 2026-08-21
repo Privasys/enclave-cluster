@@ -7,15 +7,19 @@
 # way a cluster gets its key. Asserted from the logs:
 #
 #   1. Node 1 CREATES the credential (it carries the key-creation
-#      grant), Shamir-split across the constellation, and seals a
-#      node-local copy.
+#      grant), Shamir-split across the constellation.
 #   2. Nodes 2 and 3 hold NO grant: they are admitted by attestation
 #      alone and reconstruct the key.
 #   3. All nodes read the admissible measurement set from the
 #      credential policy (the policy is the upgrade source of truth).
-#   4. A leader is elected and entries are quorum-verified.
-#   5. Node 1 restarts against its SEALED copy (no vault round-trip)
-#      and rejoins.
+#   4. A leader is elected and entries are quorum-verified (peer links
+#      are mutual challenge-mode RA-TLS).
+#   5. Node 1 restarts and REFETCHES the credential under the policy
+#      (there is no node-local copy — every boot is re-admitted) and
+#      rejoins.
+#   6. Fail-closed negative: a node presenting an identity the policy
+#      does not pin (wrong app id) cannot obtain the credential and
+#      never joins.
 #
 # Requirements
 #   - An SGX machine with DCAP quoting; run as a user in `sgx_prv`.
@@ -140,10 +144,10 @@ wait_log() { # file pattern timeout_s
 
 echo "=== 1. node 1 creates the cluster credential (grant) ==="
 stop_nodes
-rm -rf "$WORK"/n1 "$WORK"/n2 "$WORK"/n3
+rm -rf "$WORK"/n1 "$WORK"/n2 "$WORK"/n3 "$WORK"/n4
 start_node 1 1
 if wait_log "$WORK/n1/node.log" "cluster key resolved from the vault constellation" 120; then
-  ok "credential created on the constellation and sealed"
+  ok "credential created on the constellation"
 else
   fail "node 1 did not obtain the credential"
   grep -iE "error|raft" "$WORK/n1/node.log" | tail -n 10
@@ -193,20 +197,65 @@ for _ in $(seq 1 30); do
 done
 [ "$verified_ok" = 1 ] && ok "entries quorum-verified" || fail "verified index never advanced"
 
-echo "=== 5. node 1 restarts from its sealed copy ==="
+echo "=== 5. node 1 restarts and refetches under the policy ==="
 kill "$(cat "$WORK/n1.pid")" 2>/dev/null
 rm -f "$WORK/n1.pid"
 sleep 2
 start_node 1 0
-if wait_log "$WORK/n1/node.log" "cluster key restored from the sealed copy" 60; then
-  ok "sealed copy used (no vault round-trip on restart)"
+if wait_log "$WORK/n1/node.log" "cluster key resolved from the vault constellation" 120; then
+  ok "restart refetched the credential (no node-local copy)"
 else
-  fail "node 1 did not restore from the sealed copy"
+  fail "node 1 did not refetch the credential on restart"
 fi
 if wait_log "$WORK/n1/node.log" "leader=Some" 60; then
   ok "node 1 rejoined the cluster"
 else
   fail "node 1 did not rejoin"
+fi
+
+echo "=== 6. fail-closed: an unpinned identity cannot obtain the credential ==="
+# Same build, but presenting an app id the policy does not bind (OID
+# 3.6 mismatch): every vault must refuse the export, so the node has
+# no key and never boots the cluster module.
+if [ "${E2E_APP_ID:0:1}" = "0" ]; then
+  BAD_APP_ID="f${E2E_APP_ID:1}"
+else
+  BAD_APP_ID="0${E2E_APP_ID:1}"
+fi
+mkdir -p "$WORK/n4"
+cd "$WORK/n4" || exit 1
+nohup "$HOST_BIN" \
+  --enclave-path "$ENCLAVE" \
+  --port $((BASE + 3)) --peer-port $((BASE + 103)) \
+  --kv-path kv \
+  --ca-cert "$WORK/ca.crt.pem" --ca-key "$WORK/ca.pkcs8.pem" \
+  --egress-ca-bundle /etc/ssl/certs/ca-certificates.crt \
+  --attestation-servers "$E2E_AS_URL" \
+  --attestation-token-file "$E2E_AS_TOKEN_FILE" \
+  --extra "{
+    \"raft_node_id\": 4,
+    \"raft_peers\": {\"1\": \"127.0.0.1:$((BASE + 100))\"},
+    \"raft_genesis_voters\": [1, 2, 3],
+    \"raft_vault\": {
+      \"mgmt_url\": \"$E2E_MGMT_URL\",
+      \"environment\": \"$E2E_ENVIRONMENT\",
+      \"handle\": \"$E2E_HANDLE\",
+      \"grant\": \"\",
+      \"app_id\": \"$BAD_APP_ID\"
+    },
+    \"raft_acceptable_tcb_statuses\": $TCB,
+    \"raft_log_retain\": 64
+  }" > node.log 2>&1 &
+echo $! > "$WORK/n4.pid"
+if wait_log "$WORK/n4/node.log" "raft: cluster credential:" 120; then
+  if grep -q "cluster key resolved from the vault constellation" "$WORK/n4/node.log"; then
+    fail "unpinned identity obtained the credential"
+  else
+    ok "unpinned identity refused fail-closed (no credential, no cluster)"
+  fi
+else
+  fail "node 4 produced no credential error (unexpected)"
+  grep -iE "error|raft" "$WORK/n4/node.log" | tail -n 10
 fi
 
 stop_nodes
