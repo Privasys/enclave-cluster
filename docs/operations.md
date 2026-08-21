@@ -25,7 +25,7 @@ blob is written relative to it.
 | --- | --- | --- |
 | `raft_node_id` | yes | This node's id (u64, unique; joiners take ids higher than existing nodes) |
 | `raft_peers` | yes | `{"<id>": "host:port", ...}` — peer-port addresses of the other nodes |
-| `raft_vault` | yes | The cluster credential: the key lives in a vault constellation (see below). `{"mgmt_url", "environment", "handle", "grant", "app_id"}` |
+| `raft_vault` | yes | The cluster credential: the key lives in an Enclave Vaults constellation (see below). Two addressing forms: **directory** — `{"mgmt_url", "environment", "handle", "grant", "app_id"}` (the platform's vault directory finds the constellation), or **direct (BYOK)** — `{"constellation": {...}, "handle", "grant", "app_id"}` with the constellation's coordinates inline (see *Bring your own constellation*) |
 | `raft_genesis_voters` | joiners | The cluster's founding voter ids (the joiner NOT among them) |
 | `raft_log_retain` | no | Applied entries to keep in the log (default 1024; compaction triggers at twice this) |
 | `raft_acceptable_tcb_statuses` | no | Intel TCB statuses accepted on peer quotes beyond the secure floor (`UpToDate`/`SWHardeningNeeded`). Absent = no TCB check; `[]` = strict floor-only; `Revoked` is never accepted and may not be listed |
@@ -92,7 +92,57 @@ credential is cluster admission.**
   node reads the admissible measurement set from the credential
   policy's TEE profiles at boot (fail-closed, alongside the key fetch)
   and re-reads it every 10 minutes. There is no configuration
-  override.
+  override. Profiles are TEE-typed: `{"Mrenclave": "<hex32>"}` pins an
+  SGX build, `{"Tdx": {"mrtd", "rtmr1", "rtmr2"}}` (48-byte hex each)
+  pins a TDX platform build — the same policy can admit both, and peer
+  verification compares the full typed identity.
+
+## Bring your own constellation (BYOK)
+
+Enterprises that must hold their own keys can run the cluster against
+a **customer-owned [Enclave Vaults](https://docs.privasys.org/solutions/enclave-vaults/overview)
+constellation** instead of the platform's. Every property is
+preserved — fetch-is-admission, owner-approved policy upgrades,
+revocation at restart — because the vaults, the policy, and the grant
+signer are simply yours:
+
+- **Addressing.** Give the constellation's coordinates inline instead
+  of a directory URL. No platform registration or directory lookup is
+  involved; a cluster can boot with no Privasys control-plane
+  dependency at all:
+
+  ```json
+  "raft_vault": {
+    "constellation": {
+      "endpoints": ["10.0.0.11:8553", "10.0.0.12:8553", "10.0.0.13:8553"],
+      "mrenclave": "<the vault build's MRENCLAVE, hex>",
+      "attestation_server": "https://as.example.com/verify",
+      "ca_roots": ["<DER trust anchor, hex>", "..."],
+      "threshold": 2,
+      "oidc_issuer": "https://idp.example.com",
+      "acceptable_tcb_statuses": ["ConfigurationAndSWHardeningNeeded"]
+    },
+    "handle": "apps.example.com/<app-id>/raft-ck",
+    "grant": "<key-creation grant, first boot of the first node only>",
+    "app_id": "<app-id hex>"
+  }
+  ```
+
+  Addressing is not trust: the vaults still have to pass RA-TLS
+  against the pinned build measurement and the attestation server, and
+  the key policy inside them remains the authorisation boundary.
+- **Grant issuance.** The vaults verify key-creation grants against
+  the OIDC issuer *they* are configured with — a deployment setting,
+  not a platform constant. Your IdP signs the grant as a JWT with
+  audience `privasys-vault-keycreate` and claims
+  `{iss, sub (owner), scope, key_type: "RawShare", exportable: true,
+  policy, exp}`, verified against your issuer's JWKS. The policy
+  inside the grant is the owner-authored admission policy described
+  above.
+- **Attestation server.** The policy's `attestation_servers` URL and
+  the nodes' `--attestation-servers` flag point at whichever verifier
+  you trust — the platform's or your own deployment of it. The
+  exact-string-match rule applies unchanged.
 
 ## Bootstrap (founding a cluster)
 

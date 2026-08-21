@@ -33,8 +33,15 @@
 #         mint one right before running).
 #
 # Parameters (environment)
-#   E2E_MGMT_URL      management-service base URL          (required)
-#   E2E_ENVIRONMENT   vault directory environment          (required)
+#   E2E_MGMT_URL      management-service base URL   (directory mode)
+#   E2E_ENVIRONMENT   vault directory environment   (directory mode)
+#   E2E_CONSTELLATION inline constellation JSON     (direct/BYOK mode;
+#                     replaces the two above: {"endpoints": [...],
+#                     "mrenclave", "attestation_server", "ca_roots",
+#                     "threshold", "oidc_issuer",
+#                     "acceptable_tcb_statuses"} — no platform
+#                     directory involved, no enclave registration
+#                     needed)
 #   E2E_HANDLE        credential handle, under the grant's
 #                     app scope, e.g.
 #                     apps.privasys.org/<app-id>/raft-ck   (required)
@@ -59,13 +66,26 @@ WORK=${E2E_WORKDIR:-$REPO/e2e-work}
 BASE=${E2E_BASE_PORT:-9601}
 TCB=${E2E_TCB_ACCEPT:-'["ConfigurationAndSWHardeningNeeded"]'}
 
-for var in E2E_MGMT_URL E2E_ENVIRONMENT E2E_HANDLE E2E_GRANT E2E_APP_ID \
-           E2E_AS_URL E2E_AS_TOKEN_FILE; do
+for var in E2E_HANDLE E2E_GRANT E2E_APP_ID E2E_AS_URL E2E_AS_TOKEN_FILE; do
   if [ -z "${!var:-}" ]; then
     echo "missing $var (see the header of this script)" >&2
     exit 2
   fi
 done
+if [ -z "${E2E_CONSTELLATION:-}" ] \
+   && { [ -z "${E2E_MGMT_URL:-}" ] || [ -z "${E2E_ENVIRONMENT:-}" ]; }; then
+  echo "set E2E_MGMT_URL + E2E_ENVIRONMENT (directory) or E2E_CONSTELLATION (direct)" >&2
+  exit 2
+fi
+
+vault_block() { # grant app_id -> the raft_vault JSON object
+  local grant=$1 app_id=$2
+  if [ -n "${E2E_CONSTELLATION:-}" ]; then
+    echo "{\"constellation\": $E2E_CONSTELLATION, \"handle\": \"$E2E_HANDLE\", \"grant\": \"$grant\", \"app_id\": \"$app_id\"}"
+  else
+    echo "{\"mgmt_url\": \"$E2E_MGMT_URL\", \"environment\": \"$E2E_ENVIRONMENT\", \"handle\": \"$E2E_HANDLE\", \"grant\": \"$grant\", \"app_id\": \"$app_id\"}"
+  fi
+}
 [ -x "$HOST_BIN" ] || { echo "host binary not found: $HOST_BIN" >&2; exit 2; }
 [ -f "$ENCLAVE" ] || { echo "enclave not found: $ENCLAVE" >&2; exit 2; }
 
@@ -120,13 +140,7 @@ start_node() { # id with_grant(0|1)
     --extra "{
       \"raft_node_id\": $id,
       \"raft_peers\": $(peers_for "$id"),
-      \"raft_vault\": {
-        \"mgmt_url\": \"$E2E_MGMT_URL\",
-        \"environment\": \"$E2E_ENVIRONMENT\",
-        \"handle\": \"$E2E_HANDLE\",
-        \"grant\": \"$grant\",
-        \"app_id\": \"$E2E_APP_ID\"
-      },
+      \"raft_vault\": $(vault_block "$grant" "$E2E_APP_ID"),
       \"raft_acceptable_tcb_statuses\": $TCB,
       \"raft_log_retain\": 64
     }" > node.log 2>&1 &
@@ -236,13 +250,7 @@ nohup "$HOST_BIN" \
     \"raft_node_id\": 4,
     \"raft_peers\": {\"1\": \"127.0.0.1:$((BASE + 100))\"},
     \"raft_genesis_voters\": [1, 2, 3],
-    \"raft_vault\": {
-      \"mgmt_url\": \"$E2E_MGMT_URL\",
-      \"environment\": \"$E2E_ENVIRONMENT\",
-      \"handle\": \"$E2E_HANDLE\",
-      \"grant\": \"\",
-      \"app_id\": \"$BAD_APP_ID\"
-    },
+    \"raft_vault\": $(vault_block "" "$BAD_APP_ID"),
     \"raft_acceptable_tcb_statuses\": $TCB,
     \"raft_log_retain\": 64
   }" > node.log 2>&1 &

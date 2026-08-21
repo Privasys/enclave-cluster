@@ -24,8 +24,9 @@ root, QE identity, revocation, DEBUG flag, and the platform's Intel
 TCB status against the cluster's acceptance policy — so even a stolen
 fleet-CA key does not admit an attacker, and a platform downgraded
 below the accepted TCB is refused. The shared ledger commitment key
-itself is held by a vault constellation and released only to enclaves
-passing the same class of checks: obtaining the credential is
+itself is held by a vault constellation — the platform's, or a
+customer-owned one addressed directly (BYOK) — and released only to
+enclaves passing the same class of checks: obtaining the credential is
 admission, re-established on every boot (nodes keep no local copy, so
 revoking a measurement from the credential policy takes full effect at
 the affected nodes' next restart), and no shared secret exists outside

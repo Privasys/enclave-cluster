@@ -36,6 +36,13 @@ the operator documentation, and the multi-node end-to-end tests.
   re-established on every boot (nodes keep no local copy, so a policy
   revocation is total at the next restart); no shared secret ever
   exists outside TEEs, and none appears in configuration.
+- **Bring your own constellation (BYOK)** — the constellation can be
+  customer-owned: supply its coordinates inline
+  (`raft_vault.constellation`) instead of a directory URL, issue
+  grants from your own IdP, and run your own attestation verifier. No
+  platform control-plane dependency; every admission and upgrade
+  property is preserved. Measurement profiles are TEE-typed (SGX
+  MRENCLAVE or TDX MRTD/RTMRs) throughout.
 - **Policy-driven upgrades** — the credential policy is the single
   source of truth for which enclave builds may participate: nodes
   read the admissible measurement set from it and refresh
